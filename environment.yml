@@ -1,0 +1,13 @@
+name: drivemind-env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - streamlit==1.32.0
+    - langchain==0.1.13
+    - langchain-google-genai # For Gemini (or swap/add langchain-openai)
+    - pillow                 # For image processing
+    - python-dotenv          # For loading API keys securely
