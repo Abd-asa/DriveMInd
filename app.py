@@ -55,31 +55,33 @@ if uploaded_file is not None:
     
     st.divider() # Draws a neat horizontal line
     
-    # --- Step B: Capture User Query ---
+    # --- Step B: Capture User Query (UPDATED FOR UX) ---
     st.header("2. Ask the Analyst")
-    user_query = st.text_input(
-        "What would you like the AI to analyze?", 
-        placeholder="e.g., Are there any pedestrians approaching the crosswalk?"
-    )
+    
+    # Wrap the input and the execution button inside a form
+    with st.form(key="analysis_form"):
+        user_query = st.text_input(
+            "What would you like the AI to analyze?", 
+            placeholder="e.g., Are there any pedestrians approaching the crosswalk?"
+        )
+        
+        # Change st.button to st.form_submit_button
+        submit_clicked = st.form_submit_button("Analyze Scene", type="primary")
     
     # --- Step C: Execution & Loading State ---
-    # st.button returns True ONLY on the exact frame the user clicks it
-    if st.button("Analyze Scene", type="primary"):
+    # This now evaluates to True if they click the button OR press Enter
+    if submit_clicked:
         
         # Guardrail: Make sure they actually typed a question
         if not user_query:
             st.warning("Please enter a question before analyzing.")
         else:
-            # st.spinner is a context manager that shows a loading wheel while the block executes
             with st.spinner("Transmitting to DriveMind Cloud..."):
-                
-                # We call our mock contract here!
-                #response = mock_analyze(image, user_query)
-                response = analyze_dashcam_frame(image, user_query)
+                # Call the real Gemini pipeline
+                response = analyze_dashcam_frame(image, user_query) 
             
             # --- Step D: Display Results ---
             st.success("Analysis Complete!")
-            # st.info creates a nice visual callout box for the AI's answer
             st.info(response)
 
 else:
