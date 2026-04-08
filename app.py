@@ -1,18 +1,28 @@
+import sys
+import os
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+root_dir = os.path.abspath(os.path.join(current_dir, ".."))
+if root_dir not in sys.path:
+    sys.path.append(root_dir)
+
+
 import streamlit as st
 from PIL import Image
 import time
+from src.api_client import analyze_dashcam_frame
 
 # ==========================================
 # 1. THE INTERFACE CONTRACT (Mock Backend)
 # ==========================================
-def mock_analyze(image, question):
-    """
-    This simulates Developer B's VLM backend. 
-    It takes an image and a string, waits 2 seconds, and returns a fake string.
-    Later, we simply swap this out for Developer B's real function.
-    """
-    time.sleep(1) # Simulate network latency to the cloud VLM
-    return f"**Simulated VLM Analysis:**\n\nI received the image. Regarding your question (*'{question}'*): The scene appears clear, but I am just a mock function right now!"
+#def mock_analyze(image, question):
+#    
+#    This simulates Developer B's VLM backend. 
+#    It takes an image and a string, waits 2 seconds, and returns a fake string.
+#    Later, we simply swap this out for Developer B's real function.
+#    
+#    time.sleep(1) # Simulate network latency to the cloud VLM
+#    return f"**Simulated VLM Analysis:**\n\nI received the image. Regarding your question (*'{question}'*): The scene appears clear, but I am just a mock function right now!"
 
 # ==========================================
 # 2. PAGE SETUP & LAYOUT
@@ -64,7 +74,8 @@ if uploaded_file is not None:
             with st.spinner("Transmitting to DriveMind Cloud..."):
                 
                 # We call our mock contract here!
-                response = mock_analyze(image, user_query)
+                #response = mock_analyze(image, user_query)
+                response = analyze_dashcam_frame(image, user_query)
             
             # --- Step D: Display Results ---
             st.success("Analysis Complete!")
