@@ -41,7 +41,7 @@ if uploaded_file is not None:
     # We use PIL (Python Imaging Library) because it's the standard format 
     # that LangChain and Cloud APIs expect later on.
     image = Image.open(uploaded_file)
-    st.image(image, caption="Uploaded Dashcam Frame", use_container_width=True)
+    st.image(image, caption="Uploaded Dashcam Frame", use_column_width=True)
     
     st.divider() # Draws a neat horizontal line
     
