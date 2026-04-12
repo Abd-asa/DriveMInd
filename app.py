@@ -6,126 +6,212 @@ root_dir = os.path.abspath(os.path.join(current_dir, ".."))
 if root_dir not in sys.path:
     sys.path.append(root_dir)
 
-
 import streamlit as st
 from PIL import Image
-import time
 from src.api_client import analyze_dashcam_frame
 
 # ==========================================
-# 1. PAGE SETUP
+# HELPER: RENDER STRUCTURED JSON
+# ==========================================
+def render_safety_report(data):
+    if isinstance(data, dict) and "hazard_level" in data:
+        level = str(data.get("hazard_level", "")).upper()
+        if "HIGH" in level:
+            st.error(f"🚨 **HAZARD LEVEL: HIGH**")
+        elif "MEDIUM" in level:
+            st.warning(f"⚠️ **HAZARD LEVEL: MEDIUM**")
+        elif "LOW" in level:
+            st.success(f"✅ **HAZARD LEVEL: LOW**")
+        else:
+            st.info(f"ℹ️ **HAZARD LEVEL: {level}**")
+            
+        hazards = data.get("hazards_detected", [])
+        if hazards:
+            st.write("**Identified Risks:**")
+            cols = st.columns(len(hazards) if len(hazards) < 5 else 4)
+            for i, hazard in enumerate(hazards):
+                cols[i % len(cols)].button(hazard.title(), key=f"btn_{hazard}_{i}", disabled=True)
+                
+        st.write("**Analysis:**")
+        st.markdown(data.get("analysis", "No analysis provided."))
+    else:
+        st.markdown(str(data))
+
+# ==========================================
+# NEW FEATURE: MODAL DIALOG FOR CHAT OPTIONS
+# ==========================================
+@st.dialog("Chat Options")
+def manage_chat_dialog(chat_name, is_active):
+    """Pops up a clean window in the center of the screen to manage the chat."""
+    
+    # 1. Rename Logic (Auto-saves on Enter!)
+    st.markdown("**Rename Chat**")
+    new_name = st.text_input(
+        "Rename", 
+        value=chat_name, 
+        key=f"dialog_ren_{chat_name}", 
+        label_visibility="collapsed",
+        help="Type a new name and press Enter to save"
+    )
+    
+    # If the user typed a new name and pressed enter
+    if new_name and new_name != chat_name:
+        if new_name not in st.session_state.chats:
+            # Move data to new key
+            st.session_state.chats[new_name] = st.session_state.chats.pop(chat_name)
+            # Update pointer if renaming the active chat
+            if is_active:
+                st.session_state.current_chat = new_name
+            st.rerun()
+        else:
+            st.error("⚠️ Name already exists!")
+
+    st.divider()
+    
+    # 2. Delete Logic
+    if st.button("🗑️ Delete Chat", type="primary", use_container_width=True):
+        del st.session_state.chats[chat_name]
+        if is_active:
+            st.session_state.current_chat = "Landing"
+        st.rerun()
+
+# ==========================================
+# 1. PAGE SETUP & CSS
 # ==========================================
 st.set_page_config(page_title="DriveMind Analyst", page_icon="🚗", layout="wide")
 
-# ==========================================
-# 2. INITIALIZE MULTI-CHAT MEMORY
-# ==========================================
-# We now store a dictionary of chats. Keys are chat names, values are message lists.
-if "chats" not in st.session_state:
-    st.session_state.chats = {"Chat 1": []}
-if "current_chat" not in st.session_state:
-    st.session_state.current_chat = "Chat 1"
-if "chat_counter" not in st.session_state:
-    st.session_state.chat_counter = 1
+# Just tightening the gap between the buttons, no more messy CSS hacks!
+st.markdown("""
+    <style>
+    [data-testid="stSidebar"] [data-testid="column"] {
+        padding-left: 0px !important;
+        padding-right: 0px !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 # ==========================================
-# 3. SIDEBAR (History Navigation)
+# 2. INITIALIZE MEMORY (START EMPTY)
+# ==========================================
+if "chats" not in st.session_state:
+    st.session_state.chats = {}
+if "current_chat" not in st.session_state:
+    st.session_state.current_chat = "Landing"
+if "chat_counter" not in st.session_state:
+    st.session_state.chat_counter = 0
+
+# ==========================================
+# 3. SIDEBAR (Navigation)
 # ==========================================
 with st.sidebar:
     st.title("🚗 DriveMind")
     
-    # Button to create a brand new chat thread
     if st.button("➕ New Chat", use_container_width=True, type="primary"):
         st.session_state.chat_counter += 1
         new_chat_name = f"Chat {st.session_state.chat_counter}"
         st.session_state.chats[new_chat_name] = []
         st.session_state.current_chat = new_chat_name
-        st.rerun() # Refresh the UI instantly
+        st.rerun()
         
     st.divider()
-    st.subheader("Previous Chats")
     
-    # Create a navigation button for every chat history
+    if st.session_state.chats:
+        st.subheader("Chats")
+    
     for chat_name in reversed(list(st.session_state.chats.keys())):
-        # Make the currently active chat visually distinct
         is_active = (chat_name == st.session_state.current_chat)
-        if st.button(chat_name, key=chat_name, type="secondary" if not is_active else "primary", use_container_width=True):
-            st.session_state.current_chat = chat_name
-            st.rerun()
-
-# ==========================================
-# 4. MAIN DISPLAY (Chat Interface)
-# ==========================================
-st.header(f"Safety Analysis - {st.session_state.current_chat}")
-
-# --- Step A: Render the Current Chat's History ---
-active_messages = st.session_state.chats[st.session_state.current_chat]
-
-for message in active_messages:
-    with st.chat_message(message["role"]):
-        if message.get("content"):
-            st.markdown(message["content"])
-        if message.get("image"):
-            # Render the image small (250px width) instead of taking up the whole screen
-            st.image(message["image"], width=250)
-
-# --- Step B: The Modern Chat Input (With Attachment Icon) ---
-# accept_file=True places the native paperclip icon inside the chat bar!
-prompt = st.chat_input(
-    "Ask a question and attach a dashcam frame...", 
-    accept_file=True, 
-    file_type=["jpg", "jpeg", "png"]
-)
-
-# --- Step C: Logic Execution ---
-if prompt:
-    # In newer Streamlit versions, prompt is a dict-like object
-    user_text = prompt.text
-    uploaded_files = prompt["files"] if "files" in prompt else []
-    
-    # Guardrail: Make sure they didn't just submit an empty box
-    if not user_text and not uploaded_files:
-        st.stop()
         
-    new_user_message = {"role": "user", "content": user_text}
-    
-    # If they attached an image, open it and attach it to the message payload
-    image_obj = None
-    if uploaded_files:
-        image_obj = Image.open(uploaded_files[0])
-        new_user_message["image"] = image_obj
+        col_chat, col_menu = st.columns([0.88, 0.12])
         
-    # Save the new message to the active chat memory
-    st.session_state.chats[st.session_state.current_chat].append(new_user_message)
-    
-    # Draw the user's message on the screen instantly
-    with st.chat_message("user"):
-        if user_text:
-            st.markdown(user_text)
-        if image_obj:
-            st.image(image_obj, width=250)
-            
-    # Call the AI Backend
-    with st.chat_message("assistant"):
-        with st.spinner("Analyzing scene..."):
-            
-            # Look backwards in the chat history to find the most recently uploaded image
-            # (This allows the user to ask follow-up questions without re-uploading the image)
-            image_to_analyze = image_obj
-            if not image_to_analyze:
-                for msg in reversed(st.session_state.chats[st.session_state.current_chat]):
-                    if msg.get("image"):
-                        image_to_analyze = msg["image"]
-                        break
-                        
-            if not image_to_analyze:
-                error_msg = "⚠️ Please attach an image using the paperclip icon in the chat bar first!"
-                st.warning(error_msg)
-                st.session_state.chats[st.session_state.current_chat].append({"role": "assistant", "content": error_msg})
-            else:
-                # Send to Dev B's backend
-                response = analyze_dashcam_frame(image_to_analyze, user_text or "Analyze this image for safety hazards.")
-                st.markdown(response)
+        with col_chat:
+            if st.button(chat_name, key=f"sel_{chat_name}", type="primary" if is_active else "secondary", use_container_width=True):
+                st.session_state.current_chat = chat_name
+                st.rerun()
                 
-                # Save the AI's response to memory
-                st.session_state.chats[st.session_state.current_chat].append({"role": "assistant", "content": response})
+        with col_menu:
+            # --- ADD type="tertiary" HERE ---
+            if st.button("⋮", key=f"menu_{chat_name}", help="Chat Options", type="tertiary", use_container_width=True):
+                manage_chat_dialog(chat_name, is_active)
+
+# ==========================================
+# 4. MAIN DISPLAY (Landing Page OR Chat)
+# ==========================================
+
+# --- SCENARIO A: THE LANDING PAGE ---
+if st.session_state.current_chat == "Landing":
+    st.title("🚗 Welcome to DriveMind")
+    st.markdown("### Your VLM Dashcam Analyst")
+    st.info("👈 Please click **➕ New Chat** in the sidebar to begin a new safety analysis session.")
+    
+    st.divider()
+    st.markdown("""
+    **How to use this tool:**
+    1. Click **New Chat** to create a secure session.
+    2. Click the 📎 **paperclip icon** in the chat bar below to upload a dashcam frame.
+    3. Ask the Agent to evaluate the scene for safety hazards.
+    """)
+
+# --- SCENARIO B: THE CHAT INTERFACE ---
+else:
+    st.header(f"Safety Analysis - {st.session_state.current_chat}")
+
+    active_messages = st.session_state.chats.get(st.session_state.current_chat, [])
+    for message in active_messages:
+        with st.chat_message(message["role"]):
+            if message["role"] == "user":
+                if message.get("content"):
+                    st.markdown(message["content"])
+                if message.get("image"):
+                    st.image(message["image"], width=250)
+            elif message["role"] == "assistant":
+                render_safety_report(message.get("data", message.get("content")))
+
+    prompt = st.chat_input(
+        "Ask a question and attach a dashcam frame...", 
+        accept_file=True, 
+        file_type=["jpg", "jpeg", "png"]
+    )
+
+    if prompt:
+        user_text = prompt.text
+        uploaded_files = prompt["files"] if "files" in prompt else []
+        
+        if not user_text and not uploaded_files:
+            st.stop()
+            
+        new_user_message = {"role": "user", "content": user_text}
+        
+        image_obj = None
+        if uploaded_files:
+            image_obj = Image.open(uploaded_files[0])
+            new_user_message["image"] = image_obj
+            
+        st.session_state.chats[st.session_state.current_chat].append(new_user_message)
+        
+        with st.chat_message("user"):
+            if user_text:
+                st.markdown(user_text)
+            if image_obj:
+                st.image(image_obj, width=250)
+                
+        with st.chat_message("assistant"):
+            with st.spinner("Agent evaluating hazard parameters..."):
+                
+                image_to_analyze = image_obj
+                if not image_to_analyze:
+                    for msg in reversed(st.session_state.chats[st.session_state.current_chat]):
+                        if msg.get("image"):
+                            image_to_analyze = msg["image"]
+                            break
+                            
+                if not image_to_analyze:
+                    error_msg = "⚠️ Please attach an image using the paperclip icon in the chat bar first!"
+                    st.warning(error_msg)
+                    st.session_state.chats[st.session_state.current_chat].append({"role": "assistant", "content": error_msg})
+                else:
+                    structured_response = analyze_dashcam_frame(image_to_analyze, user_text or "Analyze this image for safety hazards.")
+                    render_safety_report(structured_response)
+                    st.session_state.chats[st.session_state.current_chat].append({
+                        "role": "assistant", 
+                        "data": structured_response 
+                    })
