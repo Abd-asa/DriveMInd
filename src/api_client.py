@@ -1,96 +1,103 @@
 import sys
 import os
 import asyncio
+import base64
+from io import BytesIO
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
 
+# ==========================================
+# STREAMLIT ASYNC PATCH
+# ==========================================
 try:
     asyncio.get_running_loop()
 except RuntimeError:
     asyncio.set_event_loop(asyncio.new_event_loop())
-
-
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.abspath(os.path.join(current_dir, ".."))
 if root_dir not in sys.path:
     sys.path.append(root_dir)
 
-
-import base64
-from io import BytesIO
-from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from src.prompts import SYSTEM_PROMPT
 
-# Load the API key from the .env file
 load_dotenv()
 
-# Initialize the Gemini 1.5 Flash model
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2)
+# ==========================================
+# PYDANTIC SCHEMA
+# ==========================================
+# This blueprint forces the AI to output exactly these fields in JSON
+class SafetyReport(BaseModel):
+    hazard_level: str = Field(description="Must be exactly: 'Low', 'Medium', or 'High'")
+    hazards_detected: list[str] = Field(description="A list of specific hazards seen (e.g., ['pedestrian', 'wet road']). Leave empty if none.")
+    analysis: str = Field(description="A detailed paragraph answering the user's specific question and explaining the hazard level.")
+
+# Initialize the Gemini model (Make sure this matches the model you verified works!)
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.1)
+
+# Bind the Pydantic schema to the LLM
+# This is the "Agentic" superpower: it guarantees a structured JSON return!
+structured_llm = llm.with_structured_output(SafetyReport)
+
 
 def encode_image(image):
-    """
-    Converts a PIL Image into a Base64 string format that LangChain/Gemini expects.
-    """
-    # Convert image to RGB just in case it's a PNG with a transparent background
+    """Converts PIL Image to Base64"""
     if image.mode in ("RGBA", "P"):
         image = image.convert("RGB")
-        
     buffered = BytesIO()
     image.save(buffered, format="JPEG")
-    # Encode the bytes into a string
     img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
-    
-    # Format it as a data URI
     return f"data:image/jpeg;base64,{img_str}"
+
 
 def analyze_dashcam_frame(image, user_query):
     """
-    Takes a PIL Image and a text query, sends them to Gemini, 
-    and returns the AI's text response.
+    Sends the image and query to Gemini, and returns a Python dictionary (parsed from JSON).
     """
     try:
-        # 1. Translate the PIL image into a Base64 string
         base64_image = encode_image(image)
         
-        # 2. Build the LangChain message payload
         messages = [
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(
                 content=[
                     {"type": "text", "text": user_query},
-                    # Notice we are now passing a dictionary with the Base64 URL
                     {"type": "image_url", "image_url": {"url": base64_image}} 
                 ]
             )
         ]
         
-        # 3. Send to the cloud VLM
-        response = llm.invoke(messages)
-        return response.content
+        # Invoke the structured LLM
+        response_obj = structured_llm.invoke(messages)
+        
+        # We return the raw dictionary representation of the Pydantic object
+        # Example: {"hazard_level": "Low", "hazards_detected": [], "analysis": "..."}
+        return response_obj.dict()
         
     except Exception as e:
-        return f"⚠️ DriveMind API Error: {str(e)}"
+        # Fallback error format so our UI doesn't crash
+        return {
+            "hazard_level": "Error", 
+            "hazards_detected": [], 
+            "analysis": f"⚠️ DriveMind API Error: {str(e)}"
+        }
 
 # ==========================================
-# DEVELOPER B's LOCAL TESTING BLOCK
+# LOCAL TESTING BLOCK
 # ==========================================
 if __name__ == "__main__":
     from PIL import Image
-    import sys
-    
-    # Updated path to run from the root DriveMind folder
     test_image_path = "sample_images/test.jpg" 
-    
     try:
-        print("Loading image...")
         test_img = Image.open(test_image_path)
-        print("Translating image to Base64 and sending to DriveMind Cloud...")
+        print("Sending to DriveMind Cloud for Structured Analysis...")
+        answer = analyze_dashcam_frame(test_img, "What is happening in this scene?")
         
-        # Run the function
-        answer = analyze_dashcam_frame(test_img, "Are there any hazards in this scene?")
-        print("\n--- AI RESPONSE ---")
+        print("\n--- JSON RESPONSE ---")
         print(answer)
+        print(f"Hazard Level: {answer['hazard_level']}")
         
     except FileNotFoundError:
-        print(f"Error: Could not find an image at {test_image_path}. Please check the folder.")
+        print("Image not found.")
